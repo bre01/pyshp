@@ -53,19 +53,7 @@ PARTTYPE_LOOKUP = {
 }
 
 
-def u(v, encoding="utf-8", encodingErrors="strict"):
-    if isinstance(v, bytes):
-        # For python 3 decode bytes to str.
-        return v.decode(encoding, encodingErrors)
-    elif isinstance(v, str):
-        # Already str.
-        return v
-    elif v is None:
-        # Since we're dealing with text, interpret None as ""
-        return ""
-    else:
-        # Force string representation.
-        return bytes(v).decode(encoding, encodingErrors)
+
 
 
 class Shp(object):
@@ -92,8 +80,7 @@ class Shp(object):
         (shapeName, ext) = os.path.splitext(shapefile)
         self.shapeName = shapeName
         self.load_shp(shapeName)
-        self.load_shx(shapeName)
-        self.load_dbf(shapeName)
+        #self.load_shx(shapeName)
         if not (self.shp or self.dbf):
             raise Exception("Unable to open dbf or shp")
         if self.shp:
@@ -124,9 +111,6 @@ class Shp(object):
         self.shx = open("%s.%s" % (file_name, "shx"), "rb")
         self._file_to_close.append(self.shx)
 
-    def load_dbf(self, shapefile_name):
-        self.dbf = open("%s.%s" % (shapefile_name, "dbf"), "rb")
-        self._file_to_close.append(self.dbf)
 
     def __shpHeader(self):
         shp = self.shp
@@ -146,122 +130,8 @@ class Shp(object):
                 self.mbox.append(m)
             else:
                 self.mbox.append(None)
+                
 
-    def __dbfHeader(self):
-        """Reads a dbf header. Xbase-related code borrows heavily from ActiveState Python Cookbook Recipe 362715 by Raymond Hettinger"""
-        if not self.dbf:
-            raise Exception(
-                "Shapefile Reader requires a shapefile or file-like object. (no dbf file found)"
-            )
-        dbf = self.dbf
-        # read relevant header parts
-        dbf.seek(0)
-        self.numRecords, self.__dbfHdrLength, self.__recordLength = unpack(
-            "<xxxxLHH20x", dbf.read(32)
-        )
-        # read fields
-        numFields = (self.__dbfHdrLength - 33) // 32
-        for field in range(numFields):
-            fieldDesc = list(unpack("<11sc4xBB14x", dbf.read(32)))
-            name = 0
-            idx = 0
-            if b"\x00" in fieldDesc[name]:
-                idx = fieldDesc[name].index(b"\x00")
-            else:
-                idx = len(fieldDesc[name]) - 1
-            fieldDesc[name] = fieldDesc[name][:idx]
-            # strip the \x00 trailing
-            fieldDesc[name] = u(fieldDesc[name], self.encoding, self.encodingErrors)
-            # decode
-            fieldDesc[name] = fieldDesc[name].lstrip()
-            # also strip the space at the front
-            fieldDesc[1] = u(fieldDesc[1], "ascii")
-            self.fields.append(fieldDesc)
-        terminator = dbf.read(1)
-        if terminator != b"\r":
-            raise Exception(
-                "Shapefile dbf header lacks expected terminator. (likely corrupt?)"
-            )
-
-        # insert deletion field at start
-        self.fields.insert(0, ("DeletionFlag", "C", 1, 0))
-
-        # store all field positions for easy lookups
-        # note: fieldLookup gives the index position of a field inside Reader.fields
-        self.__fieldLookup = dict((f[0], i) for i, f in enumerate(self.fields))
-
-        # by default, read all fields except the deletion flag, hence "[1:]"
-        # note: recLookup gives the index position of a field inside a _Record list
-        fieldnames = [f[0] for f in self.fields[1:]]
-        fieldTuples, recLookup, recStruct = self.__recordFields(fieldnames)
-        self.__fullRecStruct = recStruct
-        self.__fullRecLookup = recLookup
-
-    def __getFileObj(self, f):
-        if self.shp and self.shpLength is None:
-            self.load()
-        if self.dbf and len(self.fields) == 0:
-            self.load()
-        return f
-
-    def __recordFields(self, fields=None):
-        """Returns the necessary info required to unpack a record's fields,
-        restricted to a subset of fieldnames 'fields' if specified.
-        Returns a list of field info tuples, a name-index lookup dict,
-        and a Struct instance for unpacking these fields. Note that DeletionFlag
-        is not a valid field.
-        """
-        if fields is not None:
-            # restrict info to the specified fields
-            # first ignore repeated field names (order doesn't matter)
-            fields = list(set(fields))
-            # get the struct
-            fmt, fmtSize = self.__recordFmt(fields=fields)
-            recStruct = Struct(fmt)
-            # make sure the given fieldnames exist
-            for name in fields:
-                if name not in self.__fieldLookup or name == "DeletionFlag":
-                    raise ValueError('"{}" is not a valid field name'.format(name))
-            # fetch relevant field info tuples
-            fieldTuples = []
-            for fieldinfo in self.fields[1:]:
-                name = fieldinfo[0]
-                if name in fields:
-                    fieldTuples.append(fieldinfo)
-            # store the field positions
-            recLookup = dict((f[0], i) for i, f in enumerate(fieldTuples))
-        else:
-            # use all the dbf fields
-            fieldTuples = self.fields[1:]  # sans deletion flag
-            recStruct = self.__fullRecStruct
-            recLookup = self.__fullRecLookup
-        return fieldTuples, recLookup, recStruct
-
-    def __recordFmt(self, fields=None):
-        """Calculates the format and size of a .dbf record. Optional 'fields' arg
-        specifies which fieldnames to unpack and which to ignore. Note that this
-        always includes the DeletionFlag at index 0, regardless of the 'fields' arg.
-        """
-        if self.numRecords is None:
-            self.__dbfHeader()
-        structcodes = ["%ds" % fieldinfo[2] for fieldinfo in self.fields]
-        if fields is not None:
-            # only unpack specified fields, ignore others using padbytes (x)
-            structcodes = [
-                code
-                if fieldinfo[0] in fields
-                or fieldinfo[0] == "DeletionFlag"  # always unpack delflag
-                else "%dx" % fieldinfo[2]
-                for fieldinfo, code in zip(self.fields, structcodes)
-            ]
-        fmt = "".join(structcodes)
-        fmtSize = calcsize(fmt)
-        # total size of fields should add up to recordlength from the header
-        while fmtSize < self.__recordLength:
-            # if not, pad byte until reaches recordlength
-            fmt += "x"
-            fmtSize += 1
-        return (fmt, fmtSize)
 
     def iterShapes(self, bbox=None):
         """Returns a generator of shapes in a shapefile. Useful
@@ -269,7 +139,7 @@ class Shp(object):
         To only read shapes within a given spatial region, specify the 'bbox'
         arg as a list or tuple of xmin,ymin,xmax,ymax.
         """
-        shp = self.__getFileObj(self.shp)
+        shp = self.shp
         # Found shapefiles which report incorrect
         # shp file length in the header. Can't trust
         # that so we seek to the end of the file
@@ -294,7 +164,7 @@ class Shp(object):
             pos = shp.tell()
             while pos < shpLength:
                 offsets.append(pos)
-                shape = self.__shape(oid=i, bbox=bbox)
+                shape = self.__shape(oid=i)
                 pos = shp.tell()
                 if shape:
                     yield shape
@@ -304,214 +174,96 @@ class Shp(object):
             assert i == len(offsets)
             self.numShapes = i
             self._offsets = offsets
+    
+    def __getFileObj(self,fileN):
+        return fileN
 
-    def __shape(self, oid=None, bbox=None):
+    def __shape(self, oid=None):
         """Returns the header info and geometry for a single shape."""
         f = self.__getFileObj(self.shp)
-        record = Shape(oid=oid)
+        single_shape = Shape(oid=oid)
         nParts = nPoints = zmin = zmax = mmin = mmax = None
         (recNum, recLength) = unpack(">2i", f.read(8))
         # Determine the start of the next record
         next = f.tell() + (2 * recLength)
         shapeType = unpack("<i", f.read(4))[0]
-        record.shapeType = shapeType
+        single_shape.shapeType = shapeType
         # For Null shapes create an empty points list for consistency
         if shapeType == 0:
-            record.points = []
+            single_shape.points = []
         # All shape types capable of having a bounding box
         elif shapeType in (3, 5, 8, 13, 15, 18, 23, 25, 28, 31):
-            record.bbox = _Array("d", unpack("<4d", f.read(32)))
+            single_shape.bbox = _Array("d", unpack("<4d", f.read(32)))
             # if bbox specified and no overlap, skip this shape
-            if bbox is not None and not bbox_overlap(bbox, record.bbox):
-                # because we stop parsing this shape, skip to beginning of
-                # next shape before we return
-                f.seek(next)
-                return None
         # Shape types with parts
         if shapeType in (3, 5, 13, 15, 23, 25, 31):
             nParts = unpack("<i", f.read(4))[0]
         # Shape types with points
+
         if shapeType in (3, 5, 8, 13, 15, 18, 23, 25, 28, 31):
             nPoints = unpack("<i", f.read(4))[0]
         # Read parts
         if nParts:
-            record.parts = _Array("i", unpack("<%si" % nParts, f.read(nParts * 4)))
+            single_shape.parts = _Array("i", unpack("<%si" % nParts, f.read(nParts * 4)))
+
+
         # Read part types for Multipatch - 31
+        """
         if shapeType == 31:
-            record.partTypes = _Array("i", unpack("<%si" % nParts, f.read(nParts * 4)))
+            single_shape.partTypes = _Array("i", unpack("<%si" % nParts, f.read(nParts * 4))) 
+        """
+
         # Read points - produces a list of [x,y] values
         if nPoints:
             flat = unpack("<%sd" % (2 * nPoints), f.read(16 * nPoints))
-            record.points = list(izip(*(iter(flat),) * 2))
+            single_shape.points = list(izip(*(iter(flat),) * 2))
         # Read z extremes and values
         if shapeType in (13, 15, 18, 31):
             (zmin, zmax) = unpack("<2d", f.read(16))
-            record.z = _Array("d", unpack("<%sd" % nPoints, f.read(nPoints * 8)))
+            single_shape.z = _Array("d", unpack("<%sd" % nPoints, f.read(nPoints * 8)))
         # Read m extremes and values
         if shapeType in (13, 15, 18, 23, 25, 28, 31):
             if next - f.tell() >= 16:
                 (mmin, mmax) = unpack("<2d", f.read(16))
             # Measure values less than -10e38 are nodata values according to the spec
             if next - f.tell() >= nPoints * 8:
-                record.m = []
+                single_shape.m = []
                 for m in _Array("d", unpack("<%sd" % nPoints, f.read(nPoints * 8))):
                     if m > NODATA:
-                        record.m.append(m)
+                        single_shape.m.append(m)
                     else:
-                        record.m.append(None)
+                        single_shape.m.append(None)
             else:
-                record.m = [None for _ in range(nPoints)]
+                single_shape.m = [None for _ in range(nPoints)]
         # Read a single point
         if shapeType in (1, 11, 21):
-            record.points = [_Array("d", unpack("<2d", f.read(16)))]
-        # Read a single Z value
-        if shapeType == 11:
-            record.z = list(unpack("<d", f.read(8)))
-        # Read a single M value
-        if shapeType in (21, 11):
-            if next - f.tell() >= 8:
-                (m,) = unpack("<d", f.read(8))
-            else:
-                m = NODATA
-            # Measure values less than -10e38 are nodata values according to the spec
-            if m > NODATA:
-                record.m = [m]
-            else:
-                record.m = [None]
+            single_shape.points = [_Array("d", unpack("<2d", f.read(16)))]
+         
         # Seek to the end of this record as defined by the record header because
         # the shapefile spec doesn't require the actual content to meet the header
         # definition.  Probably allowed for lazy feature deletion.
         f.seek(next)
-        return record
+        return single_shape
 
-    def iterRecords(self, fields=None):
-        """Returns a generator of records in a dbf file.
-        Useful for large shapefiles or dbf files.
-        To only read some of the fields, specify the 'fields' arg as a
-        list of one or more fieldnames.
-        """
-        if self.numRecords is None:
-            self.__dbfHeader()
-        f = self.__getFileObj(self.dbf)
-        f.seek(self.__dbfHdrLength)
-        fieldTuples, recLookup, recStruct = self.__recordFields(fields)
-        for i in range(self.numRecords):
-            r = self.__record(
-                oid=i, fieldTuples=fieldTuples, recLookup=recLookup, recStruct=recStruct
-            )
-            if r:
-                yield r
+
 
     @property
     def shapeRecords(self):
         return ShapeRecords(self.iterShapeRecords())
 
     def iterShapeRecords(self):
-        for shape, record in zip(self.iterShapes(), self.iterRecords()):
-            yield ShapeRecord(shape=shape, record=record)
+
+        #for shape, record in zip(self.iterShapes(), ):
+        #    yield ShapeRecord(shape=shape, record=record)
+        for shape in self.iterShapes():
+            yield ShapeRecord(shape=shape, record=None)
 
     @property
     def __json__(self):
-        shapeRecords = self.shapeRecords
-        fcoll = shapeRecords.__json__
-        fcoll["bbox"] = list(self.bbox)
-        return fcoll
+        res= self.shapeRecords.__json__
+        res["bbox"] = list(self.bbox)
+        return res
 
-    def __record(self, fieldTuples, recLookup, recStruct, oid=None):
-        """Reads and returns a dbf record row as a list of values. Requires specifying
-        a list of field info tuples 'fieldTuples', a record name-index dict 'recLookup',
-        and a Struct instance 'recStruct' for unpacking these fields.
-        """
-        f = self.__getFileObj(self.dbf)
-
-        recordContents = recStruct.unpack(f.read(recStruct.size))
-
-        # deletion flag field is always unpacked as first value (see __recordFmt)
-        if recordContents[0] != b" ":
-            # deleted record
-            return None
-
-        # drop deletion flag from values
-        recordContents = recordContents[1:]
-
-        # check that values match fields
-        if len(fieldTuples) != len(recordContents):
-            raise Exception(
-                "Number of record values ({}) is different from the requested \
-                            number of fields ({})".format(
-                    len(recordContents), len(fieldTuples)
-                )
-            )
-
-        # parse each value
-        record = []
-        for (name, typ, size, deci), value in zip(fieldTuples, recordContents):
-            if typ in ("N", "F"):
-                # numeric or float: number stored as a string, right justified, and padded with blanks to the width of the field.
-                value = value.split(b"\0")[0]
-                value = value.replace(b"*", b"")  # QGIS NULL is all '*' chars
-                if value == b"":
-                    value = None
-                elif deci:
-                    try:
-                        value = float(value)
-                    except ValueError:
-                        # not parseable as float, set to None
-                        value = None
-                else:
-                    # force to int
-                    try:
-                        # first try to force directly to int.
-                        # forcing a large int to float and back to int
-                        # will lose information and result in wrong nr.
-                        value = int(value)
-                    except ValueError:
-                        # forcing directly to int failed, so was probably a float.
-                        try:
-                            value = int(float(value))
-                        except ValueError:
-                            # not parseable as int, set to None
-                            value = None
-            elif typ == "D":
-                # date: 8 bytes - date stored as a string in the format YYYYMMDD.
-                if (
-                    not value.replace(b"\x00", b"")
-                    .replace(b" ", b"")
-                    .replace(b"0", b"")
-                ):
-                    # dbf date field has no official null value
-                    # but can check for all hex null-chars, all spaces, or all 0s (QGIS null)
-                    value = None
-                else:
-                    try:
-                        # return as python date object
-                        y, m, d = int(value[:4]), int(value[4:6]), int(value[6:8])
-                        from datetime import date
-
-                        value = date(y, m, d)
-                    except:
-                        # if invalid date, just return as unicode string so user can decide
-                        value = u(value.strip())
-            elif typ == "L":
-                # logical: 1 byte - initialized to 0x20 (space) otherwise T or F.
-                if value == b" ":
-                    value = None  # space means missing or not yet set
-                else:
-                    if value in b"YyTt1":
-                        value = True
-                    elif value in b"NnFf0":
-                        value = False
-                    else:
-                        value = None  # unknown value is set to missing
-            else:
-                # anything else is forced to string/unicode
-                value = u(value, self.encoding, self.encodingErrors)
-                value = value.strip().rstrip(
-                    "\x00"
-                )  # remove null-padding at end of strings
-            record.append(value)
-
-        return _Record(recLookup, record, oid)
 
 
 class ShapeRecords(list):
@@ -519,7 +271,7 @@ class ShapeRecords(list):
     def __json__(self):
         collection = {
             "type": "FeatureCollection",
-            "features": [shpR.__json__ for shpR in self],
+            "features": [shpRe.__json__ for shpRe in self],
         }
         return collection
 
@@ -570,18 +322,7 @@ class Shape(object):
                 return {"type": "Point", "coordinates": tuple()}
             else:
                 return {"type": "Point", "coordinates": tuple(self.points[0])}
-        elif self.shapeType in [MULTIPOINT, MULTIPOINTM, MULTIPOINTZ]:
-            if len(self.points) == 0:
-                # the shape has no coordinate information, i.e. is 'empty'
-                # the geojson spec does not define a proper null-geometry type
-                # however, it does allow geometry types with 'empty' coordinates to be interpreted as null-geometries
-                return {"type": "MultiPoint", "coordinates": []}
-            else:
-                # multipoint
-                return {
-                    "type": "MultiPoint",
-                    "coordinates": [tuple(p) for p in self.points],
-                }
+
         elif self.shapeType in [POLYLINE, POLYLINEM, POLYLINEZ]:
             if len(self.parts) == 0:
                 # the shape has no coordinate information, i.e. is 'empty'
@@ -649,89 +390,7 @@ class Shape(object):
                 % SHAPETYPE_LOOKUP[self.shapeType]
             )
 
-    @staticmethod
-    def _from_geojson(geoj):
-        # create empty shape
-        shape = Shape()
-        # set shapeType
-        geojType = geoj["type"] if geoj else "Null"
-        if geojType == "Null":
-            shapeType = NULL
-        elif geojType == "Point":
-            shapeType = POINT
-        elif geojType == "LineString":
-            shapeType = POLYLINE
-        elif geojType == "Polygon":
-            shapeType = POLYGON
-        elif geojType == "MultiPoint":
-            shapeType = MULTIPOINT
-        elif geojType == "MultiLineString":
-            shapeType = POLYLINE
-        elif geojType == "MultiPolygon":
-            shapeType = POLYGON
-        else:
-            raise Exception("Cannot create Shape from GeoJSON type '%s'" % geojType)
-        shape.shapeType = shapeType
 
-        # set points and parts
-        if geojType == "Point":
-            shape.points = [geoj["coordinates"]]
-            shape.parts = [0]
-        elif geojType in ("MultiPoint", "LineString"):
-            shape.points = geoj["coordinates"]
-            shape.parts = [0]
-        elif geojType in ("Polygon"):
-            points = []
-            parts = []
-            index = 0
-            for i, ext_or_hole in enumerate(geoj["coordinates"]):
-                # although the latest GeoJSON spec states that exterior rings should have
-                # counter-clockwise orientation, we explicitly check orientation since older
-                # GeoJSONs might not enforce this.
-                if i == 0 and not is_cw(ext_or_hole):
-                    # flip exterior direction
-                    ext_or_hole = rewind(ext_or_hole)
-                elif i > 0 and is_cw(ext_or_hole):
-                    # flip hole direction
-                    ext_or_hole = rewind(ext_or_hole)
-                points.extend(ext_or_hole)
-                parts.append(index)
-                index += len(ext_or_hole)
-            shape.points = points
-            shape.parts = parts
-        elif geojType in ("MultiLineString"):
-            points = []
-            parts = []
-            index = 0
-            for linestring in geoj["coordinates"]:
-                points.extend(linestring)
-                parts.append(index)
-                index += len(linestring)
-            shape.points = points
-            shape.parts = parts
-        elif geojType in ("MultiPolygon"):
-            points = []
-            parts = []
-            index = 0
-            for polygon in geoj["coordinates"]:
-                for i, ext_or_hole in enumerate(polygon):
-                    # although the latest GeoJSON spec states that exterior rings should have
-                    # counter-clockwise orientation, we explicitly check orientation since older
-                    # GeoJSONs might not enforce this.
-                    if i == 0 and not is_cw(ext_or_hole):
-                        # flip exterior direction
-                        ext_or_hole = rewind(ext_or_hole)
-                    elif i > 0 and is_cw(ext_or_hole):
-                        # flip hole direction
-                        ext_or_hole = rewind(ext_or_hole)
-                    points.extend(ext_or_hole)
-                    parts.append(index)
-                    index += len(ext_or_hole)
-            shape.points = points
-            shape.parts = parts
-        return shape
-
-    @property
     def oid(self):
         """The index position of the shape in the original shapefile"""
         return self.__oid
@@ -900,12 +559,18 @@ class ShapeRecord(object):
     # line 493
     @property
     def __json__(self):
-        return {
+
+        """         return {
             "type": "Feature",
             "properties": self.record.as_dict(date_strings=True),
             "geometry": None
             if self.shape.shapeType == NULL
             else self.shape.__geo_interface__,
+        } """
+        return {
+            "type": "Feature",
+            "properties": None,
+            "geometry": self.shape.__geo_interface__
         }
 
 
