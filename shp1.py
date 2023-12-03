@@ -152,7 +152,7 @@ class Shp(object):
             # Iterate exactly the number of shapes from shx header
             for i in range(self.numShapes):
                 # MAYBE: check if more left of file or exit early?
-                shape = self.__shape(oid=i, bbox=bbox)
+                shape = self.setShapeIndex(oid=i)
                 if shape:
                     yield shape
         else:
@@ -164,7 +164,7 @@ class Shp(object):
             pos = shp.tell()
             while pos < shpLength:
                 offsets.append(pos)
-                shape = self.__shape(oid=i)
+                shape = self.setShapeIndex(oid=i)
                 pos = shp.tell()
                 if shape:
                     yield shape
@@ -178,7 +178,7 @@ class Shp(object):
     def __getFileObj(self,fileN):
         return fileN
 
-    def __shape(self, oid=None):
+    def setShapeIndex(self, oid=None):
         """Returns the header info and geometry for a single shape."""
         f = self.__getFileObj(self.shp)
         single_shape = Shape(oid=oid)
@@ -313,7 +313,7 @@ class Shape(object):
 
     @property
     def __geo_interface__(self):
-        if self.shapeType in [POINT, POINTM, POINTZ]:
+        if self.shapeType in [POINT]:
             # point
             if len(self.points) == 0:
                 # the shape has no coordinate information, i.e. is 'empty'
@@ -323,7 +323,7 @@ class Shape(object):
             else:
                 return {"type": "Point", "coordinates": tuple(self.points[0])}
 
-        elif self.shapeType in [POLYLINE, POLYLINEM, POLYLINEZ]:
+        elif self.shapeType in [POLYLINE]:
             if len(self.parts) == 0:
                 # the shape has no coordinate information, i.e. is 'empty'
                 # the geojson spec does not define a proper null-geometry type
@@ -335,59 +335,15 @@ class Shape(object):
                     "type": "LineString",
                     "coordinates": [tuple(p) for p in self.points],
                 }
-            else:
-                # multilinestring
-                ps = None
-                coordinates = []
-                for part in self.parts:
-                    if ps == None:
-                        ps = part
-                        continue
-                    else:
-                        coordinates.append([tuple(p) for p in self.points[ps:part]])
-                        ps = part
-                else:
-                    coordinates.append([tuple(p) for p in self.points[part:]])
-                return {"type": "MultiLineString", "coordinates": coordinates}
-        elif self.shapeType in [POLYGON, POLYGONM, POLYGONZ]:
-            if len(self.parts) == 0:
+        elif self.shapeType in [POLYGON]:
+        
                 # the shape has no coordinate information, i.e. is 'empty'
                 # the geojson spec does not define a proper null-geometry type
                 # however, it does allow geometry types with 'empty' coordinates to be interpreted as null-geometries
-                return {"type": "Polygon", "coordinates": []}
-            else:
-                # get all polygon rings
-                rings = []
-                for i in xrange(len(self.parts)):
-                    # get indexes of start and end points of the ring
-                    start = self.parts[i]
-                    try:
-                        end = self.parts[i + 1]
-                    except IndexError:
-                        end = len(self.points)
-
-                    # extract the points that make up the ring
-                    ring = [tuple(p) for p in self.points[start:end]]
-                    rings.append(ring)
-
-                # organize rings into list of polygons, where each polygon is defined as list of rings.
-                # the first ring is the exterior and any remaining rings are holes (same as GeoJSON).
-                polys = organize_polygon_rings(rings, self._errors)
-
-                # if VERBOSE is True, issue detailed warning about any shape errors
-                # encountered during the Shapefile to GeoJSON conversion
-                
-
-                # return as geojson
-                if len(polys) == 1:
-                    return {"type": "Polygon", "coordinates": polys[0]}
-                else:
-                    return {"type": "MultiPolygon", "coordinates": polys}
-
+            return {"type": "Polygon", "coordinates": []}
         else:
             raise Exception(
-                'Shape type "%s" cannot be represented as GeoJSON.'
-                % SHAPETYPE_LOOKUP[self.shapeType]
+                "bad shape type"
             )
 
 
