@@ -8,9 +8,9 @@ with open('a.json','w') as fp:
 print("done") """
 
 
-#sf = shp.Reader("shapefiles/test/line.shp")
-sf = shp.Reader("/Users/bre/source/Open-source-GIS-Course/KunmingProjectedUtm.shp")
-geoj=sf.__json__
-with open('v1.json','w') as fp:
-    json.dump(geoj,fp);
+# sf = shp.Reader("shapefiles/test/line.shp")
+sf = shp.Shp("/Users/bre/source/Open-source-GIS-Course/KunmingProjectedUtm.shp")
+geoj = sf.__json__
+with open("v1.json", "w") as fp:
+    json.dump(geoj, fp)
 print("done")
