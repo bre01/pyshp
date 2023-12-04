@@ -253,8 +253,9 @@ class Shp(object):
 
     def iterShapeRecords(self):
 
-        #for shape, record in zip(self.iterShapes(), ):
-        #    yield ShapeRecord(shape=shape, record=record)
+        # the number of shape and record should be the same
+        # in a typical(correct) shapefile 
+        # so we combine dbf attribute and shape into the a shapeRecord
         for shape in self.iterShapes():
             yield ShapeRecord(shape=shape, record=None)
 
@@ -312,7 +313,7 @@ class Shape(object):
             self.__oid = -1
 
     @property
-    def __geo_interface__(self):
+    def __json__(self):
         if self.shapeType in [POINT]:
             # point
             if len(self.points) == 0:
@@ -339,8 +340,34 @@ class Shape(object):
         
                 # the shape has no coordinate information, i.e. is 'empty'
                 # the geojson spec does not define a proper null-geometry type
+
                 # however, it does allow geometry types with 'empty' coordinates to be interpreted as null-geometries
-            return {"type": "Polygon", "coordinates": []}
+            if len(self.parts)==0:
+                return {"type": "Polygon", "coordinates": []}
+            else:
+                rings=[]
+                for i in range(len(self.parts)):
+                    start=self.parts[i]
+                    try:
+                        end=self.parts[i+1] 
+                    except IndexError:
+                        print("IndexError")
+                        end=len(self.points)
+                        
+                    theRing=[p for p in self.points[start:end]]
+                    rings.append(theRing)
+
+
+                # get all polygon rings
+                # if VERBOSE is True, issue detailed warning about any shape errors
+                # encountered during the Shapefile to GeoJSON conversion
+                
+
+                # return as geojson
+                return {"type": "Polygon", "coordinates": rings}
+
+
+
         else:
             raise Exception(
                 "bad shape type"
@@ -506,7 +533,7 @@ class _Record(list):
 
 class ShapeRecord(object):
     """A ShapeRecord object containing a shape along with its attributes.
-    Provides the GeoJSON __geo_interface__ to return a Feature dictionary."""
+    Provides the __json__ property to return a Feature dictionary."""
 
     def __init__(self, shape=None, record=None):
         self.shape = shape
@@ -516,17 +543,11 @@ class ShapeRecord(object):
     @property
     def __json__(self):
 
-        """         return {
-            "type": "Feature",
-            "properties": self.record.as_dict(date_strings=True),
-            "geometry": None
-            if self.shape.shapeType == NULL
-            else self.shape.__geo_interface__,
-        } """
+        # we don't have properties now, so return properties as null 
         return {
             "type": "Feature",
             "properties": None,
-            "geometry": self.shape.__geo_interface__
+            "geometry": self.shape.__json__
         }
 
 
